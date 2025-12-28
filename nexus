@@ -27,18 +27,20 @@ cleanup() {
     exit 0
 }
 
+# --- Status Function ---
+
 get_disk_usage() {
-    disk_usage=$( df -h | awk ' /\/$/ { print $5 }' | sed 's/%//')
+    local disk_usage=$( df -h | awk ' /\/$/ { print $5 }' | sed 's/%//')
     echo "$disk_usage"
 }
 
 get_ram_usage() {
-    ram_usage_perc=$( free -m | awk '/Mem:/ { printf "%.0f", $3/$2 * 100 }')
+    local ram_usage_perc=$( free -m | awk '/Mem:/ { printf "%.0f", $3/$2 * 100 }')
     echo "$ram_usage_perc"
 }
 
 get_docker_count() {
-    docker_count=$( docker ps -q | wc -l )
+    local docker_count=$( docker ps -q | wc -l )
     echo "$docker_count"
 }
 
@@ -76,21 +78,21 @@ progress_bar() {
     echo "$bar"
 }
 
-print_stat() {
-    info="$1"
+display_stat_dashboard() {
+    local info="$1"
 
     # Get 5 minute value if info is for LOAD as it provides 3 values
     # Else use the provided argument
     if [[ "$info" != "LOAD" ]]; then
-        calc_val="$2"
-        display_val="$2"
+        local calc_val="$2"
+        local display_val="$2"
     else
-        temp=$(echo "$2" | awk '{ print $2 }')
-        calc_val=${temp/./}  # Just remove the period and remove the leading zero in the future
-        display_val=$temp
+        local temp=$(echo "$2" | awk '{ print $2 }')
+        local calc_val=${temp/./}  # Just remove the period and remove the leading zero in the future
+        local display_val=$temp
     fi
 
-    val_color=$GREEN
+    local val_color=$GREEN
     if [[ $calc_val -ge $THRESHOLD ]]; then
         val_color=$RED
     fi
@@ -105,7 +107,8 @@ print_stat() {
     echo -n $RESET
 }
 
-show_status() {
+
+status() {
     tput home
 
     tput cup 1 0
@@ -115,15 +118,15 @@ show_status() {
         tput cup 3 0
         # print_stat "RAM" "$(get_ram_usage)"
         # print_stat "DISK" "$(get_disk_usage)"
-        print_stat "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
-        print_stat "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
+        display_stat_dashboard "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
+        display_stat_dashboard "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
 
         echo;
-        print_stat "LOAD" "$(get_load_usage)"
+        display_stat_dashboard "LOAD" "$(get_load_usage)"
 
         echo; echo
         # docker_count=$(get_docker_count)
-        docker_count=$(($RANDOM % (2 - 0 + 1) + 0))
+        local docker_count=$(($RANDOM % (2 - 0 + 1) + 0))
 
         if [[ docker_count -gt 0 ]]; then
             status="${BOLD}${GREEN}Running${RESET}"
@@ -133,8 +136,8 @@ show_status() {
 
         echo "--------------------------------------------------"
 
-        clean_str="$docker_count (Status: $status)"
-        pad_len=$((45 - ${#clean_str}))
+        local clean_str="$docker_count (Status: $status)"
+        local pad_len=$((45 - ${#clean_str}))
 
         printf "%-15s  %*s${BOLD}%s${RESET} (Status: %s)\n" \
           "Docker Containers:" \
@@ -156,6 +159,120 @@ show_status() {
     return 0
 }
 
+# --- Service Function ---
+
+stop_service() {
+    sudo systemctl stop "$1"
+    sleep 1
+}
+
+kill_service() {
+    local service="$1"
+    if [[ "$service" == "bluetooth" ]]; then
+        sudo rfkill block bluetooth
+    fi
+
+    stop_service "$service"
+    sleep 1
+}
+
+enable_service() {
+    local service="$1"
+    if [[ "$service" == "bluetooth" ]]; then
+        sudo rfkill unblock bluetooth
+    fi
+
+    sudo systemctl start "$service"
+    sleep 1
+}
+
+display_service_dashboard() {
+    tput home 
+
+    local sys_service="$1"
+    local stat="$2"
+    local rf_status="$3"
+
+    print_header "NEXUS SERVICE CONTROL" 
+
+    echo
+    printf "  %-20s ${BOLD}${CYAN}%s${RESET}\n" "TARGET:" "$sys_service"
+    printf "  %-20s ${BOLD}%s${RESET}\n" "STATUS:" "$stat"
+    if [[ -n "$rf_status" ]]; then
+        printf "  %-20s ${BOLD}%s${RESET}\n" "RADIO:" "$rf_status"
+    fi
+
+    echo ""
+    echo "------------------------------------------"
+    echo "   [1] Hard Kill (Power Saver Mode)"
+    echo "   [2] Soft Stop (Service Only)"
+    echo "   [3] Enable (Turn On)"
+    echo "   [q] Quit"
+    echo ""
+}
+
+control_service() {
+    tput smcup
+    tput civis
+
+    local service="$1"
+
+    if [[ -z "$service" ]]; then
+        echo "Usage: nexus control [bt|docker]"
+        return 1
+    fi
+
+    case "$service" in
+        bt | bluetooth) local sys_service="Bluetooth" ;;
+        docker) local sys_service="${service^}" ;;
+        *)
+            echo "${RED}Unknown service: $service${RESET}"
+            return 1
+            ;;
+    esac
+
+    while true; do
+        tput clear
+
+        local status="$(echo $(systemctl is-active "${sys_service,}") | tr '[:lower:]' '[:upper:]')"
+        if [[ "$status" == "ACTIVE" ]]; then
+            status="${GREEN}${status}${RESET}"
+        else
+            status="${RED}${status}${RESET}"
+        fi
+
+
+        local rf_status=""
+        if [[ "$service" =~ ^(bt|bluetooth)$ ]]; then
+            if rfkill list bluetooth | grep -q "Soft blocked: yes"; then
+                rf_status="${RED}[BLOCKED]${RESET}"
+            else
+                rf_status="${GREEN}[UNBLOCKED]${RESET}"
+            fi
+        fi
+
+        display_service_dashboard "$sys_service" "$status" "$rf_status"
+
+
+        read -N 1 -p "Select action: " key
+        tput ed
+        echo
+
+
+        case "$key" in
+            1)  echo "${RED}Killing $sys_service...${RESET}"
+                kill_service "${sys_service,}"
+                ;;
+            2)  echo "${RED}Stopping $sys_service...${RESET}"
+                stop_service "${sys_service,}"
+                ;;
+            3)  echo "${GREEN}Enabling $sys_service...${RESET}"
+                enable_service "${sys_service,}"
+                ;;
+            q) cleanup;;
+        esac
+    done
+}
 
 # --- Main Controller ---
 
@@ -166,23 +283,24 @@ command=${1:-help}
 case "$command" in
     status) 
         tput smcup; tput civis
-        show_status
+        status
         ;;
-    free)
-        echo "Running free command"
+    service)
+        tput smcup; tput civis
+        control_service ${@:2}
         ;;
     new)
         echo "Running new command"
         ;;
     help|--help|-h)
         print_header "NEXUS HELP"
-        echo "  status            Open System Dashboard"
-        echo "  free <port>       Kill process on specific port"
-        echo "  new <type> <name> Create new project (python/bash)"
+        echo "  status              Open System Dashboard"
+        echo "  service <service>   Kill service on systemctl"
+        echo "  new <type> <name>   Create new project (python/bash)"
         ;;
     *)
         echo "Error: Unknown command '$1'" >&2
-        echo "Usage: nexus [status|free|new]" >&2
+        echo "Usage: nexus [status|service|new]" >&2
         exit 1
         ;;
 esac
