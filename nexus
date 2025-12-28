@@ -62,8 +62,8 @@ progress_bar() {
         elif [[ i -eq threshold_bars ]]; then
             bar+=$RED
         fi
-        bar+="█"
-        # bar+="|"
+        # bar+="█"
+        bar+="|"
     done
     bar+="$RESET"
     for ((;i < bar_length; i++)); do
@@ -78,17 +78,25 @@ progress_bar() {
 
 print_stat() {
     info="$1"
-    val="$2"
+
+    # Get 5 minute value if info is for LOAD as it provides 3 values
+    # Else use the provided argument
+    if [[ $info != "LOAD" ]]; then
+        val="$2"
+    else
+        temp=$(echo "$2" | awk '{ print $2 }')
+        val=${temp/./}  # Just remove the period and remove the leading zero in the future
+    fi
 
     val_color=$GREEN
     if [[ $val -ge $THRESHOLD ]]; then
         val_color=$RED
     fi
 
-    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar $val)" "$val"
+    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar $val)" "${val#0}"
 
     case $info in
-        LOAD)   echo "(Low)";;
+        LOAD)   echo " ${RESET}($2)";;
         *) echo "%";;
     esac
 
@@ -98,20 +106,23 @@ print_stat() {
 show_status() {
     tput home
 
-    tput cup 1 1
+    tput cup 1 0
     print_header "NEXUS SYSTEM DASHBOARD"
 
     while true; do
-        tput cup 3 1
+        tput cup 3 0
         # print_stat "RAM" "$(get_ram_usage)"
         # print_stat "DISK" "$(get_disk_usage)"
         print_stat "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
-        tput cup 4 1
         print_stat "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
 
-        tput cup 6 1
+        tput cup 6
+        print_stat "LOAD" "$(get_load_usage)"
+
+        tput cup 8 0
         # docker_count=$(get_docker_count)
         docker_count=$(($RANDOM % (5 - 0 + 1) + 0))
+
         if [[ docker_count -gt 0 ]]; then
             status="${BOLD}${GREEN}Running${RESET}"
         else
@@ -119,21 +130,20 @@ show_status() {
         fi
 
         echo "---------------------------------------------"
-        clean_str="$docker_count (Status: $status)"
 
+        clean_str="$docker_count (Status: $status)"
         pad_len=$((40 - ${#clean_str}))
 
-        tput cup 7 1
         printf "%-15s  %*s${BOLD}%s${RESET} (Status: %s)\n" \
           "Docker Containers:" \
           $pad_len "" \
           "$docker_count" \
           "$status"
-        echo " ---------------------------------------------"
+
+        echo "---------------------------------------------"
 
         tput cup $((LINES - 1)) 0
         read -t 1 -p "Press Q to quit: " -N 1 -s key
-
 
         if [[ $key == q ]]; then
             cleanup
@@ -141,25 +151,7 @@ show_status() {
 
     done
 
-    # while true; do
-    #     tput cup 3 1
-    #     # print_stat "RAM" "$(get_ram_usage)"
-    #     # print_stat "DISK" "$(get_disk_usage)"
-    #     print_stat "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
-    #     tput cup 4 1
-    #     print_stat "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
-    #
-    #     tput cup $((LINES - 1)) 0
-    #     read -t 1 -p "Press Q to quit: " -N 1 -s key
-    #
-    #     if [[ $key == q ]]; then
-    #         cleanup
-    #     fi
-    #
-    # done
-    
     return 0
-
 }
 
 trap cleanup SIGINT
