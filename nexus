@@ -24,7 +24,7 @@ print_header() {
 cleanup() {
     tput cnorm
     tput rmcup
-    exit 1
+    exit 0
 }
 
 get_disk_usage() {
@@ -81,19 +81,21 @@ print_stat() {
 
     # Get 5 minute value if info is for LOAD as it provides 3 values
     # Else use the provided argument
-    if [[ $info != "LOAD" ]]; then
-        val="$2"
+    if [[ "$info" != "LOAD" ]]; then
+        calc_val="$2"
+        display_val="$2"
     else
         temp=$(echo "$2" | awk '{ print $2 }')
-        val=${temp/./}  # Just remove the period and remove the leading zero in the future
+        calc_val=${temp/./}  # Just remove the period and remove the leading zero in the future
+        display_val=$temp
     fi
 
     val_color=$GREEN
-    if [[ $val -ge $THRESHOLD ]]; then
+    if [[ $calc_val -ge $THRESHOLD ]]; then
         val_color=$RED
     fi
 
-    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar $val)" "${val#0}"
+    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar $calc_val)" "${display_val}"
 
     case $info in
         LOAD)   echo " ${RESET}($2)";;
@@ -116,12 +118,12 @@ show_status() {
         print_stat "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
         print_stat "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
 
-        tput cup 6
+        echo;
         print_stat "LOAD" "$(get_load_usage)"
 
-        tput cup 8 0
+        echo; echo
         # docker_count=$(get_docker_count)
-        docker_count=$(($RANDOM % (5 - 0 + 1) + 0))
+        docker_count=$(($RANDOM % (2 - 0 + 1) + 0))
 
         if [[ docker_count -gt 0 ]]; then
             status="${BOLD}${GREEN}Running${RESET}"
@@ -129,10 +131,10 @@ show_status() {
             status="${BOLD}${CYAN}Sleep Mode${RESET}"
         fi
 
-        echo "---------------------------------------------"
+        echo "--------------------------------------------------"
 
         clean_str="$docker_count (Status: $status)"
-        pad_len=$((40 - ${#clean_str}))
+        pad_len=$((45 - ${#clean_str}))
 
         printf "%-15s  %*s${BOLD}%s${RESET} (Status: %s)\n" \
           "Docker Containers:" \
@@ -140,7 +142,7 @@ show_status() {
           "$docker_count" \
           "$status"
 
-        echo "---------------------------------------------"
+        echo "--------------------------------------------------"
 
         tput cup $((LINES - 1)) 0
         read -t 1 -p "Press Q to quit: " -N 1 -s key
@@ -154,8 +156,36 @@ show_status() {
     return 0
 }
 
+
+# --- Main Controller ---
+
 trap cleanup SIGINT
 
+command=${1:-help}
 
-tput smcup; tput civis
-show_status
+case "$command" in
+    status) 
+        tput smcup; tput civis
+        show_status
+        ;;
+    free)
+        echo "Running free command"
+        ;;
+    new)
+        echo "Running new command"
+        ;;
+    help|--help|-h)
+        print_header "NEXUS HELP"
+        echo "  status            Open System Dashboard"
+        echo "  free <port>       Kill process on specific port"
+        echo "  new <type> <name> Create new project (python/bash)"
+        ;;
+    *)
+        echo "Error: Unknown command '$1'" >&2
+        echo "Usage: nexus [status|free|new]" >&2
+        exit 1
+        ;;
+esac
+
+
+
