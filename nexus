@@ -158,9 +158,11 @@ status_controller() {
     return 0
 }
 
-# --- Service Function ---
+# =====================
+# === Service Logic ===
+# =====================
 
-
+# --- Models Functions ---
 
 stop_service() {
     sudo systemctl stop "$1"
@@ -187,18 +189,62 @@ enable_service() {
     sleep 1
 }
 
+is_valid_service() {
+    case "$1" in
+        bt|bluetooth|docker) return 0;;
+        *) return 1;;
+    esac
+}
+
+get_requested_service() {
+    local service="$1"
+
+    case "$service" in
+        bt|bluetooth) echo "Bluetooth";;
+        docker) echo "Docker";;
+        *) return 1;;
+    esac
+}
+
+get_service_status() {
+    systemctl is-active "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+get_rf_status() {
+    local rf_status=""
+    if [[ "$1" == "Bluetooth" ]]; then
+        if rfkill list bluetooth | grep -q "Soft blocked: yes"; then
+            rf_status="${RED}[BLOCKED]${RESET}"
+        else
+            rf_status="${GREEN}[UNBLOCKED]${RESET}"
+        fi
+    fi
+
+    echo "$rf_status"
+    return 0
+}
+
+# -- View Functions ---
+
 display_service_dashboard() {
     tput home 
+    tput ed
 
     local target_service="$1"
-    local stat="$2"
+    local status="$2"
     local rf_status="$3"
+
+    if [[ "$status" == "ACTIVE" ]]; then
+        status="${GREEN}${status}${RESET}"
+    else
+        status="${RED}${status}${RESET}"
+    fi
 
     print_header "NEXUS SERVICE CONTROL" 
 
     echo
     printf "  %-20s ${BOLD}${CYAN}%s${RESET}\n" "TARGET:" "$target_service"
-    printf "  %-20s ${BOLD}%s${RESET}\n" "STATUS:" "$stat"
+    printf "  %-20s ${BOLD}%s${RESET}\n" "STATUS:" "$status"
     if [[ -n "$rf_status" ]]; then
         printf "  %-20s ${BOLD}%s${RESET}\n" "RADIO:" "$rf_status"
     fi
@@ -212,57 +258,14 @@ display_service_dashboard() {
     echo ""
 }
 
-get_requested_service() {
-    local service="$1"
-
-    case "$service" in
-        bt|bluetooth) echo "Bluetooth";;
-        docker) echo "Docker";;
-        *)
-            echo "${RED}Unknown service: $service${RESET}" >&2
-            return 1
-            ;;
-    esac
-
-    return 0
-}
+# --- Controller Function ---
 
 service_controller() {
-    tput smcup
-    tput civis
-
-    local service="$1"
-    if [[ -z "$service" ]]; then
-        echo "Usage: nexus control [bt|docker]"
-        return 1
-    fi
-
-    local target_service=$(get_requested_service "$service")
-    if [[ $? -ne 0 ]]; then
-        tput rmcup
-        tput cnorm
-        return 1
-    fi
+    local target_service="$1"
 
     while true; do
-        tput clear
-
-        local status="$(echo $(systemctl is-active "${target_service,}") | tr '[:lower:]' '[:upper:]')"
-        if [[ "$status" == "ACTIVE" ]]; then
-            status="${GREEN}${status}${RESET}"
-        else
-            status="${RED}${status}${RESET}"
-        fi
-
-
-        local rf_status=""
-        if [[ "$service" =~ ^(bt|bluetooth)$ ]]; then
-            if rfkill list bluetooth | grep -q "Soft blocked: yes"; then
-                rf_status="${RED}[BLOCKED]${RESET}"
-            else
-                rf_status="${GREEN}[UNBLOCKED]${RESET}"
-            fi
-        fi
+        local status=$(get_service_status "$target_service")
+        local rf_status=$(get_rf_status "$target_service")
 
         display_service_dashboard "$target_service" "$status" "$rf_status"
 
@@ -309,13 +312,21 @@ trap cleanup SIGINT
 command=${1:-help}
 
 case "$command" in
-    status) 
+    status)
         tput smcup; tput civis
         status_controller
         ;;
     service)
-        tput smcup; tput civis
-        service_controller ${@:2}
+        if [[ -z "$2" ]]; then
+            echo "Usage: nexus control [bt|docker]"
+            return 1
+        fi
+
+        target_service=$(get_requested_service "$2") || { 
+            echo "${RED}Error: '$2' is not a supported service.${RESET}" >&2 
+            exit 1
+        }
+        with_tui service_controller "$target_service"
         ;;
     new)
         echo "Running new command"
@@ -332,6 +343,3 @@ case "$command" in
         exit 1
         ;;
 esac
-
-
-
