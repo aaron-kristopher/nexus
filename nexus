@@ -64,8 +64,8 @@ progress_bar() {
         elif [[ i -eq threshold_bars ]]; then
             bar+=$RED
         fi
-        # bar+="█"
-        bar+="|"
+        bar+="█"
+        # bar+="|"
     done
     bar+="$RESET"
     for ((;i < bar_length; i++)); do
@@ -87,9 +87,8 @@ display_stat_dashboard() {
         local calc_val="$2"
         local display_val="$2"
     else
-        local temp=$(echo "$2" | awk '{ print $2 }')
-        local calc_val=${temp/./}  # Just remove the period and remove the leading zero in the future
-        local display_val=$temp
+        local display_val=$(echo "$2" | awk '{ print $2 }')
+        local calc_val=$(awk -v a="$display_val" 'BEGIN { print a * 100 }')  # Make into a whole number for progress bar calculation
     fi
 
     local val_color=$GREEN
@@ -97,18 +96,18 @@ display_stat_dashboard() {
         val_color=$RED
     fi
 
-    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar $calc_val)" "${display_val}"
+    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar ${calc_val})" "${display_val}"
 
     case $info in
-        LOAD)   echo " ${RESET}($2)";;
-        *) echo "%";;
+        LOAD)   echo " ${RESET}($2)";;  # Prints the three loads ex. (0.11 0.12 0.12)
+        *) echo "%";;  # Prints out % for Disk and Ram
     esac
 
     echo -n $RESET
 }
 
 
-status() {
+status_controller() {
     tput home
 
     tput cup 1 0
@@ -161,6 +160,8 @@ status() {
 
 # --- Service Function ---
 
+
+
 stop_service() {
     sudo systemctl stop "$1"
     sleep 1
@@ -189,14 +190,14 @@ enable_service() {
 display_service_dashboard() {
     tput home 
 
-    local sys_service="$1"
+    local target_service="$1"
     local stat="$2"
     local rf_status="$3"
 
     print_header "NEXUS SERVICE CONTROL" 
 
     echo
-    printf "  %-20s ${BOLD}${CYAN}%s${RESET}\n" "TARGET:" "$sys_service"
+    printf "  %-20s ${BOLD}${CYAN}%s${RESET}\n" "TARGET:" "$target_service"
     printf "  %-20s ${BOLD}%s${RESET}\n" "STATUS:" "$stat"
     if [[ -n "$rf_status" ]]; then
         printf "  %-20s ${BOLD}%s${RESET}\n" "RADIO:" "$rf_status"
@@ -204,37 +205,49 @@ display_service_dashboard() {
 
     echo ""
     echo "------------------------------------------"
-    echo "   [1] Hard Kill (Power Saver Mode)"
-    echo "   [2] Soft Stop (Service Only)"
-    echo "   [3] Enable (Turn On)"
+    echo "   [1] Enable Service (Turn On)"
+    echo "   [2] Stop Service (Turn Off)"
+    [[ "$target_service" == "Bluetooth" ]] && echo "   [3] Kill Service (Stop Service and Radio)"
     echo "   [q] Quit"
     echo ""
 }
 
-control_service() {
+get_requested_service() {
+    local service="$1"
+
+    case "$service" in
+        bt|bluetooth) echo "Bluetooth";;
+        docker) echo "Docker";;
+        *)
+            echo "${RED}Unknown service: $service${RESET}" >&2
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+service_controller() {
     tput smcup
     tput civis
 
     local service="$1"
-
     if [[ -z "$service" ]]; then
         echo "Usage: nexus control [bt|docker]"
         return 1
     fi
 
-    case "$service" in
-        bt | bluetooth) local sys_service="Bluetooth" ;;
-        docker) local sys_service="${service^}" ;;
-        *)
-            echo "${RED}Unknown service: $service${RESET}"
-            return 1
-            ;;
-    esac
+    local target_service=$(get_requested_service "$service")
+    if [[ $? -ne 0 ]]; then
+        tput rmcup
+        tput cnorm
+        return 1
+    fi
 
     while true; do
         tput clear
 
-        local status="$(echo $(systemctl is-active "${sys_service,}") | tr '[:lower:]' '[:upper:]')"
+        local status="$(echo $(systemctl is-active "${target_service,}") | tr '[:lower:]' '[:upper:]')"
         if [[ "$status" == "ACTIVE" ]]; then
             status="${GREEN}${status}${RESET}"
         else
@@ -251,7 +264,7 @@ control_service() {
             fi
         fi
 
-        display_service_dashboard "$sys_service" "$status" "$rf_status"
+        display_service_dashboard "$target_service" "$status" "$rf_status"
 
 
         read -N 1 -p "Select action: " key
@@ -260,18 +273,33 @@ control_service() {
 
 
         case "$key" in
-            1)  echo "${RED}Killing $sys_service...${RESET}"
-                kill_service "${sys_service,}"
+            1)  echo "${GREEN}Enabling $target_service...${RESET}"
+                enable_service "${target_service,}"
                 ;;
-            2)  echo "${RED}Stopping $sys_service...${RESET}"
-                stop_service "${sys_service,}"
+            2)  echo "${RED}Stopping $target_service...${RESET}"
+                stop_service "${target_service,}"
                 ;;
-            3)  echo "${GREEN}Enabling $sys_service...${RESET}"
-                enable_service "${sys_service,}"
+            3)  echo "${RED}Killing $target_service...${RESET}"
+                kill_service "${target_service,}"
                 ;;
             q) cleanup;;
         esac
     done
+}
+
+with_tui() {
+    local controller_func=$1
+    local args="${@:2}"
+
+    tput smcup
+    tput civis
+
+    trap cleanup SIGINT
+
+    "$controller_func" "$args"
+
+    tput rmcup
+    tput cnorm
 }
 
 # --- Main Controller ---
@@ -283,11 +311,11 @@ command=${1:-help}
 case "$command" in
     status) 
         tput smcup; tput civis
-        status
+        status_controller
         ;;
     service)
         tput smcup; tput civis
-        control_service ${@:2}
+        service_controller ${@:2}
         ;;
     new)
         echo "Running new command"
