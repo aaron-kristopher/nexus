@@ -30,24 +30,19 @@ cleanup() {
 # --- Status Function ---
 
 get_disk_usage() {
-    local disk_usage=$( df -h | awk ' /\/$/ { print $5 }' | sed 's/%//')
-    echo "$disk_usage"
+    df -h | awk ' /\/$/ { print $5 }' | sed 's/%//'
 }
 
 get_ram_usage() {
-    local ram_usage_perc=$( free -m | awk '/Mem:/ { printf "%.0f", $3/$2 * 100 }')
-    echo "$ram_usage_perc"
+    free -m | awk '/Mem:/ { printf "%.0f", $3/$2 * 100 }'
 }
 
 get_docker_count() {
-    local docker_count=$( docker ps -q | wc -l )
-    echo "$docker_count"
+    docker ps -q | wc -l
 }
 
 get_load_usage() {
-    local cores=$(nproc)
-    local loads=$(awk -v c="$cores" '{printf "%.2f %.2f %.2f", $1/c, $2/c, $3/c}' /proc/loadavg)
-    echo "$loads"
+    awk -v c="$(nproc)" '{printf "%.2f %.2f %.2f", $1/c, $2/c, $3/c}' /proc/loadavg
 }
 
 progress_bar() {
@@ -70,7 +65,6 @@ progress_bar() {
     bar+="$RESET"
     for ((;i < bar_length; i++)); do
         bar+=" "
-        # bar+="░"
     done
 
     bar+="]"
@@ -78,7 +72,7 @@ progress_bar() {
     echo "$bar"
 }
 
-display_stat_dashboard() {
+draw_stat() {
     local info="$1"
 
     # Get 5 minute value if info is for LOAD as it provides 3 values
@@ -96,7 +90,7 @@ display_stat_dashboard() {
         val_color=$RED
     fi
 
-    printf "%-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar ${calc_val})" "${display_val}"
+    printf "  %-5s %s ${BOLD}$val_color%3s" "$info" "$(progress_bar ${calc_val})" "${display_val}"
 
     case $info in
         LOAD)   echo " ${RESET}($2)";;  # Prints the three loads ex. (0.11 0.12 0.12)
@@ -106,53 +100,54 @@ display_stat_dashboard() {
     echo -n $RESET
 }
 
+draw_docker_stat() {
+    local docker_count="$1"
+
+    if [[ docker_count -gt 0 ]]; then
+        status="${BOLD}${GREEN}Running${RESET}"
+    else
+        status="${BOLD}${CYAN}Sleep Mode${RESET}"
+    fi
+
+    echo "----------------------------------------------------"
+
+    local clean_str="$docker_count (Status: $status)"
+    local pad_len=$((43 - ${#clean_str}))
+
+        printf "  %-15s  %*s${BOLD}%s${RESET} (Status: %s)\n" \
+            "Docker Containers:" \
+            $pad_len "" \
+            "$docker_count" \
+            "$status"
+
+        echo "----------------------------------------------------"
+}
+
+display_status_dashboard() {
+    tput home
+    print_header "NEXUS SYSTEM DASHBOARD"
+    echo 
+
+    draw_stat "RAM" "$1"
+    draw_stat "DISK" "$2"
+    draw_stat "LOAD" "$3"
+
+    echo 
+    draw_docker_stat "$4"
+
+    tput cup $((LINES - 1)) 0
+}
 
 status_controller() {
     tput home
 
-    tput cup 1 0
-    print_header "NEXUS SYSTEM DASHBOARD"
 
     while true; do
-        tput cup 3 0
-        # print_stat "RAM" "$(get_ram_usage)"
-        # print_stat "DISK" "$(get_disk_usage)"
-        display_stat_dashboard "RAM" "$(($RANDOM % (100 - 1 + 1) + 1))"
-        display_stat_dashboard "DISK" "$(($RANDOM % (100 - 1 + 1) + 1))"
+        tput cup 1 0
+        display_status_dashboard "$(get_ram_usage)" "$(get_disk_usage)" "$(get_load_usage)" "$(get_docker_count)"
 
-        echo;
-        display_stat_dashboard "LOAD" "$(get_load_usage)"
-
-        echo; echo
-        # docker_count=$(get_docker_count)
-        local docker_count=$(($RANDOM % (2 - 0 + 1) + 0))
-
-        if [[ docker_count -gt 0 ]]; then
-            status="${BOLD}${GREEN}Running${RESET}"
-        else
-            status="${BOLD}${CYAN}Sleep Mode${RESET}"
-        fi
-
-        echo "--------------------------------------------------"
-
-        local clean_str="$docker_count (Status: $status)"
-        local pad_len=$((45 - ${#clean_str}))
-
-        printf "%-15s  %*s${BOLD}%s${RESET} (Status: %s)\n" \
-          "Docker Containers:" \
-          $pad_len "" \
-          "$docker_count" \
-          "$status"
-
-        echo "--------------------------------------------------"
-
-        tput cup $((LINES - 1)) 0
         read -t 1 -p "Press Q to quit: " -N 1 -s key
-
-        if [[ $key == q ]]; then
-            cleanup
-        fi
-
+        [[ $key == q ]] && cleanup
     done
 
     return 0
@@ -313,8 +308,7 @@ command=${1:-help}
 
 case "$command" in
     status)
-        tput smcup; tput civis
-        status_controller
+        with_tui status_controller
         ;;
     service)
         if [[ -z "$2" ]]; then
